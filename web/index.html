@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>北北桃房價地圖 v1</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<style>
+  html, body { margin: 0; height: 100%; font-family: "Noto Sans TC", system-ui, sans-serif; }
+  #map { position: absolute; inset: 0; }
+  #panel {
+    position: absolute; top: 10px; left: 10px; z-index: 10;
+    background: rgba(255,255,255,.95); border-radius: 8px; padding: 12px 14px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.25); width: 260px; font-size: 13px;
+  }
+  #panel h1 { font-size: 15px; margin: 0 0 8px; }
+  .row { margin: 8px 0; }
+  .seg { display: flex; gap: 4px; }
+  .seg button {
+    flex: 1; padding: 4px 2px; border: 1px solid #bbb; background: #fff;
+    border-radius: 4px; cursor: pointer; font-size: 12px;
+  }
+  .seg button.on { background: #2563eb; color: #fff; border-color: #2563eb; }
+  label { color: #444; }
+  #legend { margin-top: 8px; }
+  #legend .lrow { display: flex; align-items: center; gap: 6px; margin: 1px 0; }
+  #legend .swatch { width: 18px; height: 12px; border: 1px solid #999; }
+  #hoverbox {
+    position: absolute; pointer-events: none; z-index: 20; display: none;
+    background: rgba(0,0,0,.8); color: #fff; padding: 6px 9px; border-radius: 5px;
+    font-size: 12px; line-height: 1.5;
+  }
+  input[type=range] { width: 100%; }
+  .muted { color: #888; font-size: 11px; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="panel">
+  <h1>北北桃房價地圖 <span class="muted">v1</span></h1>
+  <div class="row seg" id="viewSeg">
+    <button data-v="unit" class="on">單價/坪</button>
+    <button data-v="total">總價</button>
+    <button data-v="n">成交量</button>
+  </div>
+  <div class="row seg" id="catSeg">
+    <button data-c="all" class="on">全部</button>
+    <button data-c="used">中古</button>
+    <button data-c="presale">預售</button>
+  </div>
+  <div class="row">
+    <label>總價範圍（中位數，萬）：<span id="prLabel"></span></label>
+    <input type="range" id="prMin" min="0" max="20000" step="100" value="0">
+    <input type="range" id="prMax" min="0" max="20000" step="100" value="20000">
+  </div>
+  <div class="row">
+    <label><input type="checkbox" id="chk3d"> 3D 高度起伏</label>
+  </div>
+  <div id="legend"></div>
+  <div class="muted" id="status"></div>
+</div>
+<div id="hoverbox"></div>
+
+<script>
+const VIEWS = { unit: "單價中位數", total: "總價中位數", n: "成交筆數" };
+const GRAY = "#c8c8c8";
+const RAMP = ["#ffffcc","#ffeda0","#fed976","#feb24c","#fd8d3c","#fc4e2a","#e31a1c","#b10026"];
+let view = "unit", cat = "all", geojson = null, breaks = [];
+
+const map = new maplibregl.Map({
+  container: "map",
+  style: {
+    version: 8,
+    sources: {
+      osm: {
+        type: "raster",
+        tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+        tileSize: 256,
+        attribution: "© OpenStreetMap contributors ｜ 資料：內政部實價登錄"
+      }
+    },
+    layers: [{ id: "osm", type: "raster", source: "osm" }]
+  },
+  center: [121.35, 25.0],
+  zoom: 9.3,
+  pitch: 0
+});
+
+function prop(suffix) { return `${cat}_${suffix}`; }
+function metricProp() { return prop(view); }
+
+function computeBreaks() {
+  const vals = geojson.features
+    .map(f => f.properties[metricProp()])
+    .filter(v => v != null && isFinite(v))
+    .sort((a, b) => a - b);
+  breaks = [];
+  if (!vals.length) return;
+  for (let i = 1; i < RAMP.length; i++) {
+    breaks.push(vals[Math.floor(vals.length * i / RAMP.length)]);
+  }
+}
+
+function fmt(v) {
+  if (view === "n") return v + " 筆";
+  if (view === "unit") return (v / 1e4).toFixed(1) + " 萬/坪";
+  return (v / 1e4).toFixed(0) + " 萬";
+}
+
+function paintExpr() {
+  const m = ["get", metricProp()];
+  const ins = ["get", prop("insufficient")];
+  const total = ["get", prop("total")];
+  const lo = +prMin.value * 1e4, hi = +prMax.value * 1e4;
+  const colorStep = ["step", m, RAMP[0]];
+  breaks.forEach((b, i) => colorStep.push(b, RAMP[i + 1]));
+  return ["case",
+    ["any", ["==", ins, true], ["==", m, null],
+      ["all", ["!=", total, null], ["any", ["<", total, lo], [">", total, hi]]]],
+    GRAY,
+    colorStep
+  ];
+}
+
+function heightExpr() {
+  const m = ["get", metricProp()];
+  const max = breaks.length ? breaks[breaks.length - 1] : 1;
+  return ["case", ["==", m, null], 0,
+    ["*", ["/", m, max], 3000]];
+}
+
+function restyle() {
+  computeBreaks();
+  map.setPaintProperty("vill-fill", "fill-color", paintExpr());
+  map.setPaintProperty("vill-3d", "fill-extrusion-color", paintExpr());
+  map.setPaintProperty("vill-3d", "fill-extrusion-height", heightExpr());
+  renderLegend();
+  prLabel.textContent = `${prMin.value} ~ ${prMax.value}`;
+}
+
+function renderLegend() {
+  const el = document.getElementById("legend");
+  let html = `<b>${VIEWS[view]}</b>`;
+  let prev = null;
+  RAMP.forEach((c, i) => {
+    const hiB = breaks[i];
+    let t;
+    if (i === 0) t = hiB != null ? "< " + fmt(hiB) : "";
+    else if (hiB == null) t = "≥ " + fmt(prev);
+    else t = fmt(prev) + " ~ " + fmt(hiB);
+    prev = hiB;
+    html += `<div class="lrow"><div class="swatch" style="background:${c}"></div>${t}</div>`;
+  });
+  html += `<div class="lrow"><div class="swatch" style="background:${GRAY}"></div>無資料 / 不足 / 範圍外</div>`;
+  el.innerHTML = html;
+}
+
+let inited = false;
+async function init() {
+  if (inited) return;
+  inited = true;
+  const r = await fetch("../data/processed/map_data.geojson");
+  geojson = await r.json();
+  map.addSource("vill", { type: "geojson", data: geojson });
+  map.addLayer({ id: "vill-fill", type: "fill", source: "vill",
+    paint: { "fill-color": GRAY, "fill-opacity": 0.72 } });
+  map.addLayer({ id: "vill-line", type: "line", source: "vill",
+    paint: { "line-color": "#666", "line-width": 0.4 } });
+  map.addLayer({ id: "vill-3d", type: "fill-extrusion", source: "vill",
+    layout: { visibility: "none" },
+    paint: { "fill-extrusion-color": GRAY, "fill-extrusion-height": 0,
+             "fill-extrusion-opacity": 0.85 } });
+  restyle();
+  document.getElementById("status").textContent =
+    `里數 ${geojson.features.length}`;
+
+  const box = document.getElementById("hoverbox");
+  map.on("mousemove", "vill-fill", e => {
+    const p = e.features[0].properties;
+    const u = p[prop("unit")], t = p[prop("total")], n = p[prop("n")];
+    box.style.display = "block";
+    box.style.left = (e.point.x + 14) + "px";
+    box.style.top = (e.point.y + 14) + "px";
+    box.innerHTML = `<b>${p.county}${p.town}${p.village}</b><br>` +
+      (p[prop("insufficient")] ? "成交不足（灰色）<br>" : "") +
+      `單價中位數：${u != null ? (u/1e4).toFixed(1) + " 萬/坪" : "—"}<br>` +
+      `總價中位數：${t != null ? (t/1e4).toFixed(0) + " 萬" : "—"}<br>` +
+      `成交筆數：${n ?? 0}`;
+  });
+  map.on("mouseleave", "vill-fill", () => box.style.display = "none");
+}
+// 瓦片源被擋或很慢時 load 不會觸發，改在 style.load 即初始化資料圖層
+map.on("style.load", init);
+map.on("load", init);
+setTimeout(() => { if (map.isStyleLoaded()) init(); }, 3000);
+
+viewSeg.onclick = e => {
+  if (!e.target.dataset.v) return;
+  view = e.target.dataset.v;
+  [...viewSeg.children].forEach(b => b.classList.toggle("on", b === e.target));
+  restyle();
+};
+catSeg.onclick = e => {
+  if (!e.target.dataset.c) return;
+  cat = e.target.dataset.c;
+  [...catSeg.children].forEach(b => b.classList.toggle("on", b === e.target));
+  restyle();
+};
+prMin.oninput = prMax.oninput = () => {
+  if (+prMin.value > +prMax.value) prMin.value = prMax.value;
+  restyle();
+};
+chk3d.onchange = () => {
+  const on = chk3d.checked;
+  map.setLayoutProperty("vill-3d", "visibility", on ? "visible" : "none");
+  map.setLayoutProperty("vill-fill", "visibility", on ? "none" : "visible");
+  map.easeTo({ pitch: on ? 50 : 0 });
+  restyle();
+};
+</script>
+</body>
+</html>

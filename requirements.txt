@@ -1,0 +1,17 @@
+certifi==2026.6.17
+charset-normalizer==3.4.9
+geopandas==1.1.4
+idna==3.18
+numpy==2.5.1
+packaging==26.2
+pandas==3.0.3
+pyarrow==25.0.0
+pyogrio==0.13.0
+pyproj==3.7.2
+python-dateutil==2.9.0.post0
+requests==2.34.2
+shapely==2.1.2
+six==1.17.0
+truststore==0.10.4
+tzdata==2026.3
+urllib3==2.7.0
