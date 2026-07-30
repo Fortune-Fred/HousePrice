@@ -19,6 +19,7 @@ STEPS = [
     ("行政區界（若已存在則跳過）", ["pipeline/towns.py"]),
     ("Geocode 與歸里（吃快取）", ["pipeline/geocode.py"]),
     ("聚合輸出 GeoJSON", ["pipeline/aggregate.py"]),
+    ("供需風險分級", ["pipeline/risk.py"]),
 ]
 
 

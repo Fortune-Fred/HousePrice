@@ -99,11 +99,12 @@ if (new URLSearchParams(location.search).has("rafshim")) {
     <button id="panelToggle" type="button" aria-expanded="true" aria-label="收合篩選條件">▾</button>
   </div>
   <div id="panelBody">
-    <div class="row seg" id="viewSeg">
+    <div class="row seg" id="viewSeg" style="flex-wrap:wrap">
       <button data-v="unit" class="on">單價/坪</button>
       <button data-v="total">總價</button>
       <button data-v="n">成交量</button>
-      <button data-v="egg">蛋黃蛋白</button>
+      <button data-v="egg" style="flex-basis:48%">蛋黃蛋白</button>
+      <button data-v="risk" style="flex-basis:48%">供需風險</button>
     </div>
     <div class="row" id="eggRow" style="display:none">
       <label>蛋黃門檻：縣市內單價前 <b id="yolkLabel">20</b>%</label>
@@ -142,10 +143,13 @@ if (new URLSearchParams(location.search).has("rafshim")) {
 
 <script src="overlays.js"></script>
 <script>
-const VIEWS = { unit: "單價中位數", total: "總價中位數", n: "成交筆數", egg: "蛋黃蛋白" };
+const VIEWS = { unit: "單價中位數", total: "總價中位數", n: "成交筆數", egg: "蛋黃蛋白", risk: "供需風險" };
 const GRAY = "#c8c8c8";
 const RAMP = ["#ffffcc","#ffeda0","#fed976","#feb24c","#fd8d3c","#fc4e2a","#e31a1c","#b10026"];
 const EGG = { yolk: "#f2a900", white: "#fbf3d9", shell: "#c7b299" };
+const RISK = { red: "#d9534f", yellow: "#f0ad4e", green: "#94c47a" };
+const FLAG_NAMES = { vac: "空屋率高", unsold: "餘屋壓力", hh: "戶數負成長", vol: "量縮", cancel: "解約率高" };
+let riskData = null;
 const CATS = ["all", "used", "presale"];
 const CAT_NAMES = { all: "全部", used: "中古", presale: "預售" };
 let view = "unit", cat = "all", geojson = null, breaks = [], yolkPct = 20;
@@ -245,10 +249,19 @@ function heightExpr() {
 }
 
 function restyle() {
-  computeBreaks();
-  map.setPaintProperty("vill-fill", "fill-color", paintExpr());
-  map.setPaintProperty("vill-3d", "fill-extrusion-color", paintExpr());
-  map.setPaintProperty("vill-3d", "fill-extrusion-height", heightExpr());
+  const isRisk = view === "risk";
+  if (map.getLayer("towns-fill"))
+    map.setLayoutProperty("towns-fill", "visibility", isRisk ? "visible" : "none");
+  map.setLayoutProperty("vill-fill", "visibility",
+    isRisk || chk3d.checked ? "none" : "visible");
+  map.setLayoutProperty("vill-3d", "visibility",
+    !isRisk && chk3d.checked ? "visible" : "none");
+  if (!isRisk) {
+    computeBreaks();
+    map.setPaintProperty("vill-fill", "fill-color", paintExpr());
+    map.setPaintProperty("vill-3d", "fill-extrusion-color", paintExpr());
+    map.setPaintProperty("vill-3d", "fill-extrusion-height", heightExpr());
+  }
   eggRow.style.display = view === "egg" ? "block" : "none";
   renderLegend();
   renderHome();
@@ -265,6 +278,20 @@ function yolkCut(county) {
 
 function renderLegend() {
   const el = document.getElementById("legend");
+  if (view === "risk") {
+    if (!riskData) { el.innerHTML = "<b>供需風險</b><div class='muted'>risk_towns.json 未產出</div>"; return; }
+    const m = riskData.meta, th = riskData.thresholds;
+    el.innerHTML =
+      `<b>供需風險（行政區五旗標）</b>` +
+      `<div class="lrow"><div class="swatch" style="background:${RISK.red}"></div>紅：≥3 個風險旗標</div>` +
+      `<div class="lrow"><div class="swatch" style="background:${RISK.yellow}"></div>黃：2 個</div>` +
+      `<div class="lrow"><div class="swatch" style="background:${RISK.green}"></div>綠：≤1 個</div>` +
+      `<div class="muted">旗標：空屋率≥${th.vac_p75}%｜每千戶餘屋≥${th.unsold1k_p75}｜` +
+      `戶數年增≤0｜量縮≤-20%｜解約率≥${th.cancel_p75}%</div>` +
+      `<div class="muted">資料：空屋${m.vac_period}｜餘屋${m.unsold_period}｜戶數${m.hh_period}｜` +
+      `量能近4季至${m.vol_recent[m.vol_recent.length-1]}</div>`;
+    return;
+  }
   if (view === "egg") {
     el.innerHTML =
       `<b>蛋黃蛋白（各縣市內部單價分位）</b>` +
@@ -332,7 +359,18 @@ function setArming(on) {
 
 /* ---------- 疊加圖層：行政區 / 軌道 / 地標 / 地名標籤 ---------- */
 function addOverlays(towns) {
+  if (riskData) {
+    towns.features.forEach(f => {
+      const r = riskData.towns[f.properties.county + "|" + f.properties.town];
+      if (r) { f.properties.risk_level = r.level; f.properties.risk = JSON.stringify(r); }
+    });
+  }
   map.addSource("towns", { type: "geojson", data: towns });
+  map.addLayer({ id: "towns-fill", type: "fill", source: "towns",
+    layout: { visibility: "none" },
+    paint: { "fill-color": ["match", ["coalesce", ["get", "risk_level"], "x"],
+               "red", RISK.red, "yellow", RISK.yellow, "green", RISK.green, GRAY],
+             "fill-opacity": 0.55 } });
   map.addLayer({ id: "towns-line", type: "line", source: "towns",
     paint: { "line-color": "#3b3b3b", "line-width": 1.4, "line-opacity": 0.75 } });
   towns.features.forEach(f => {
@@ -392,11 +430,13 @@ let inited = false;
 async function init() {
   if (inited) return;
   inited = true;
-  const [gjRes, twRes] = await Promise.all([
+  const [gjRes, twRes, rkRes] = await Promise.all([
     fetch("../data/processed/map_data.geojson"),
     fetch("../data/processed/towns.geojson").catch(() => null),
+    fetch("../data/processed/risk_towns.json").catch(() => null),
   ]);
   geojson = await gjRes.json();
+  try { if (rkRes && rkRes.ok) riskData = await rkRes.json(); } catch (e) {}
   computeRanks();
   map.addSource("vill", { type: "geojson", data: geojson });
   map.addLayer({ id: "vill-fill", type: "fill", source: "vill",
@@ -450,6 +490,31 @@ async function init() {
   });
   map.on("mouseleave", "vill-fill", () => box.style.display = "none");
 
+  map.on("mousemove", "towns-fill", e => {
+    const p = e.features[0].properties;
+    let r = null;
+    try { r = p.risk ? JSON.parse(p.risk) : null; } catch (err) {}
+    box.style.display = "block";
+    box.style.left = (e.point.x + 14) + "px";
+    box.style.top = (e.point.y + 14) + "px";
+    if (!r) {
+      box.innerHTML = `<b>${p.county}${p.town}</b><br>無風險資料`;
+      return;
+    }
+    const lvName = { red: "🔴 紅", yellow: "🟡 黃", green: "🟢 綠" }[r.level];
+    box.innerHTML = `<b>${p.county}${p.town}</b><br>` +
+      `${lvName}（旗標 ${r.flags.length}：${r.flags.map(f => FLAG_NAMES[f]).join("、") || "無"}）<br>` +
+      `空屋率：${r.vac ?? "—"}%（上期 ${r.vac_prev ?? "—"}%）<br>` +
+      `待售新成屋：${r.unsold?.toLocaleString() ?? "—"} 宅` +
+      `${r.unsold_yoy != null ? "（年增" + (r.unsold_yoy >= 0 ? "+" : "") + r.unsold_yoy + "）" : ""}` +
+      `｜每千戶 ${r.unsold1k ?? "—"}<br>` +
+      `戶數年增：${r.hh_yoy != null ? (r.hh_yoy >= 0 ? "+" : "") + r.hh_yoy + "%" : "—"}<br>` +
+      `成交量近4季 vs 前4季：${r.vol_chg != null ? (r.vol_chg >= 0 ? "+" : "") + r.vol_chg + "%" : "—"}` +
+      `（${r.vol_recent} vs ${r.vol_prior} 筆）<br>` +
+      `預售解約率：${r.cancel_rate != null ? r.cancel_rate + "%（" + r.cancel_n + "/" + r.presale_n + "）" : "樣本不足"}`;
+  });
+  map.on("mouseleave", "towns-fill", () => box.style.display = "none");
+
   map.on("click", "vill-fill", e => {
     if (!arming) return;
     const p = e.features[0].properties;
@@ -491,10 +556,7 @@ yolkSlider.oninput = () => {
   restyle();
 };
 chk3d.onchange = () => {
-  const on = chk3d.checked;
-  map.setLayoutProperty("vill-3d", "visibility", on ? "visible" : "none");
-  map.setLayoutProperty("vill-fill", "visibility", on ? "none" : "visible");
-  map.easeTo({ pitch: on ? 50 : 0 });
+  map.easeTo({ pitch: chk3d.checked ? 50 : 0 });
   restyle();
 };
 chkLabels.onchange = () => {

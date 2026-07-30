@@ -32,7 +32,31 @@ geocode（純資料工作，不需要 AI，照下面指令跑完即可）。
 - `pipeline/` 下載、解析、清洗、geocode、聚合腳本
 - `data/raw/` 原始 CSV（gitignore）；`data/processed/` parquet 與 GeoJSON
 - `reports/` 清洗、geocode 評估與歸里報告
-- `web/` MapLibre 靜態地圖（單價/總價/成交量/蛋黃蛋白四視圖、預售/中古切換、
+- `web/` MapLibre 靜態地圖（單價/總價/成交量/蛋黃蛋白/供需風險五視圖、預售/中古切換、
   總價滑桿、3D、行政區界與區名、桃園軌道站點含到北車時間、地標、
   「她家基準」相對價比較；`overlays.js` 為站點地標靜態資料）
   - 網址加 `?rafshim=1` 可在無 rAF 的環境（如 Claude 瀏覽器面板）強制渲染，供自動化驗證
+
+## 風險資料更新（供需風險視圖）
+
+`pipeline/risk.py` 產出 `data/processed/risk_towns.json` 與 `reports/risk_report.md`，
+五指標中三個全自動（戶數＝戶政司 API、量能與解約率＝自有實價登錄）；
+**空屋率與待售新成屋**來自內政部不動產資訊平台（pip.moi.gov.tw），該站有
+F5 反爬（TSPD），`requests`/`curl` 會被擋，只能經真實瀏覽器下載：
+
+1. 瀏覽器開 https://pip.moi.gov.tw/Publicize/Info/E1040 後按 F12 開 Console，執行：
+   ```js
+   for (const [dg, p] of [["DataGroup3","115H1"], ["DataGroup4","115Q2"]])  // 換成新期別
+     for (const c of ["63000","65000","68000"])
+       fetch("/Publicize/Info/E1040", { method: "POST",
+         headers: { "Content-Type": "application/x-www-form-urlencoded" },
+         body: new URLSearchParams({ F01: dg, F02: p, F03: c }) })
+         .then(r => r.blob()).then(b => {
+           const a = document.createElement("a");
+           a.href = URL.createObjectURL(b);
+           a.download = `${dg === "DataGroup3" ? "DG3" : "DG4"}_${p}_${c}.csv`; a.click();
+         });
+   ```
+2. 下載的檔案放進 `data/raw/risk/pip/`，重跑 `python pipeline/risk.py`。
+3. 更新頻率：低度用電每半年（2月/7月出刊）、待售新成屋每季；沒更新也能跑，
+   risk.py 自動取目錄內最新期別。
