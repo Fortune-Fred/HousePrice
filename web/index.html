@@ -11,10 +11,22 @@
   #map { position: absolute; inset: 0; }
   #panel {
     position: absolute; top: 10px; left: 10px; z-index: 10;
-    background: rgba(255,255,255,.95); border-radius: 8px; padding: 12px 14px;
+    background: rgba(255,255,255,.95); border-radius: 8px; padding: 10px 14px;
     box-shadow: 0 2px 8px rgba(0,0,0,.25); width: 260px; font-size: 13px;
+    max-height: calc(100vh - 20px); overflow-y: auto; box-sizing: border-box;
   }
-  #panel h1 { font-size: 15px; margin: 0 0 8px; }
+  .panelHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  #panel h1 { font-size: 15px; margin: 0; }
+  #panelBody { margin-top: 8px; }
+  #panelToggle {
+    flex: none; width: 28px; height: 28px; border: 1px solid #bbb; background: #fff;
+    border-radius: 4px; cursor: pointer; font-size: 13px; line-height: 1; color: #333;
+  }
+  #panel.collapsed { padding-bottom: 10px; }
+  #panel.collapsed #panelBody { display: none; }
+  @media (max-width: 600px) {
+    #panel { width: calc(100vw - 20px); }
+  }
   .row { margin: 8px 0; }
   .seg { display: flex; gap: 4px; }
   .seg button {
@@ -38,27 +50,32 @@
 <body>
 <div id="map"></div>
 <div id="panel">
-  <h1>北北桃房價地圖 <span class="muted">v1</span></h1>
-  <div class="row seg" id="viewSeg">
-    <button data-v="unit" class="on">單價/坪</button>
-    <button data-v="total">總價</button>
-    <button data-v="n">成交量</button>
+  <div class="panelHead">
+    <h1>北北桃房價地圖 <span class="muted">v1</span></h1>
+    <button id="panelToggle" type="button" aria-expanded="true" aria-label="收合篩選條件">▾</button>
   </div>
-  <div class="row seg" id="catSeg">
-    <button data-c="all" class="on">全部</button>
-    <button data-c="used">中古</button>
-    <button data-c="presale">預售</button>
+  <div id="panelBody">
+    <div class="row seg" id="viewSeg">
+      <button data-v="unit" class="on">單價/坪</button>
+      <button data-v="total">總價</button>
+      <button data-v="n">成交量</button>
+    </div>
+    <div class="row seg" id="catSeg">
+      <button data-c="all" class="on">全部</button>
+      <button data-c="used">中古</button>
+      <button data-c="presale">預售</button>
+    </div>
+    <div class="row">
+      <label>總價範圍（中位數，萬）：<span id="prLabel"></span></label>
+      <input type="range" id="prMin" min="0" max="20000" step="100" value="0">
+      <input type="range" id="prMax" min="0" max="20000" step="100" value="20000">
+    </div>
+    <div class="row">
+      <label><input type="checkbox" id="chk3d"> 3D 高度起伏</label>
+    </div>
+    <div id="legend"></div>
+    <div class="muted" id="status"></div>
   </div>
-  <div class="row">
-    <label>總價範圍（中位數，萬）：<span id="prLabel"></span></label>
-    <input type="range" id="prMin" min="0" max="20000" step="100" value="0">
-    <input type="range" id="prMax" min="0" max="20000" step="100" value="20000">
-  </div>
-  <div class="row">
-    <label><input type="checkbox" id="chk3d"> 3D 高度起伏</label>
-  </div>
-  <div id="legend"></div>
-  <div class="muted" id="status"></div>
 </div>
 <div id="hoverbox"></div>
 
@@ -218,6 +235,15 @@ chk3d.onchange = () => {
   map.easeTo({ pitch: on ? 50 : 0 });
   restyle();
 };
+
+function setPanelCollapsed(collapsed) {
+  panel.classList.toggle("collapsed", collapsed);
+  panelToggle.textContent = collapsed ? "▸" : "▾";
+  panelToggle.setAttribute("aria-expanded", String(!collapsed));
+  panelToggle.setAttribute("aria-label", collapsed ? "展開篩選條件" : "收合篩選條件");
+}
+panelToggle.onclick = () => setPanelCollapsed(!panel.classList.contains("collapsed"));
+setPanelCollapsed(window.matchMedia("(max-width: 600px)").matches);
 </script>
 </body>
 </html>
