@@ -16,6 +16,7 @@ STEPS = [
     ("解析合併", ["pipeline/parse.py"]),
     ("清洗過濾", ["pipeline/clean.py"]),
     ("村里界（若已存在則跳過）", ["pipeline/villages.py"]),
+    ("行政區界（若已存在則跳過）", ["pipeline/towns.py"]),
     ("Geocode 與歸里（吃快取）", ["pipeline/geocode.py"]),
     ("聚合輸出 GeoJSON", ["pipeline/aggregate.py"]),
 ]

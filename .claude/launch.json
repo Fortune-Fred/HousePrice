@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "map",
-      "runtimeExecutable": "C:\\grillme\\.venv\\Scripts\\python.exe",
-      "runtimeArgs": ["-m", "http.server", "8642", "--directory", "C:\\grillme"],
+      "runtimeExecutable": "D:\\HousePrice\\.venv\\Scripts\\python.exe",
+      "runtimeArgs": ["-m", "http.server", "8642", "--directory", "D:\\HousePrice"],
       "port": 8642
     }
   ]

@@ -32,4 +32,7 @@ geocode（純資料工作，不需要 AI，照下面指令跑完即可）。
 - `pipeline/` 下載、解析、清洗、geocode、聚合腳本
 - `data/raw/` 原始 CSV（gitignore）；`data/processed/` parquet 與 GeoJSON
 - `reports/` 清洗、geocode 評估與歸里報告
-- `web/` MapLibre 靜態地圖（三視圖、預售/中古切換、總價滑桿、3D）
+- `web/` MapLibre 靜態地圖（單價/總價/成交量/蛋黃蛋白四視圖、預售/中古切換、
+  總價滑桿、3D、行政區界與區名、桃園軌道站點含到北車時間、地標、
+  「她家基準」相對價比較；`overlays.js` 為站點地標靜態資料）
+  - 網址加 `?rafshim=1` 可在無 rAF 的環境（如 Claude 瀏覽器面板）強制渲染，供自動化驗證

@@ -2,9 +2,16 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
-<title>北北桃房價地圖 v1</title>
+<title>北北桃房價地圖 v1.1</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+<script>
+// ?rafshim=1：無 rAF 的環境（如 Claude 瀏覽器面板）用 setTimeout 代替，供自動化驗證
+if (new URLSearchParams(location.search).has("rafshim")) {
+  window.requestAnimationFrame = cb => setTimeout(() => cb(performance.now()), 16);
+  window.cancelAnimationFrame = id => clearTimeout(id);
+}
+</script>
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <style>
   html, body { margin: 0; height: 100%; font-family: "Noto Sans TC", system-ui, sans-serif; }
@@ -12,7 +19,7 @@
   #panel {
     position: absolute; top: 10px; left: 10px; z-index: 10;
     background: rgba(255,255,255,.95); border-radius: 8px; padding: 10px 14px;
-    box-shadow: 0 2px 8px rgba(0,0,0,.25); width: 260px; font-size: 13px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.25); width: 268px; font-size: 13px;
     max-height: calc(100vh - 20px); overflow-y: auto; box-sizing: border-box;
   }
   .panelHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -30,28 +37,65 @@
   .row { margin: 8px 0; }
   .seg { display: flex; gap: 4px; }
   .seg button {
-    flex: 1; padding: 4px 2px; border: 1px solid #bbb; background: #fff;
+    flex: 1; padding: 4px 1px; border: 1px solid #bbb; background: #fff;
     border-radius: 4px; cursor: pointer; font-size: 12px;
   }
   .seg button.on { background: #2563eb; color: #fff; border-color: #2563eb; }
   label { color: #444; }
+  #lyrRow label { margin-right: 6px; white-space: nowrap; font-size: 12px; }
+  button.wide {
+    width: 100%; padding: 6px; border: 1px solid #bbb; background: #fff;
+    border-radius: 4px; cursor: pointer; font-size: 12px; box-sizing: border-box;
+  }
+  button.wide.arming { background: #fef3c7; border-color: #f59e0b; }
   #legend { margin-top: 8px; }
   #legend .lrow { display: flex; align-items: center; gap: 6px; margin: 1px 0; }
-  #legend .swatch { width: 18px; height: 12px; border: 1px solid #999; }
+  #legend .swatch { width: 18px; height: 12px; border: 1px solid #999; flex: none; }
   #hoverbox {
     position: absolute; pointer-events: none; z-index: 20; display: none;
     background: rgba(0,0,0,.8); color: #fff; padding: 6px 9px; border-radius: 5px;
     font-size: 12px; line-height: 1.5;
   }
+  #hoverbox .ratio { color: #ffd54f; }
   input[type=range] { width: 100%; }
   .muted { color: #888; font-size: 11px; }
+  /* 疊加標記：行政區名 / 站點 / 地標（皆不擋滑鼠事件） */
+  .townlbl {
+    font-size: 11px; font-weight: 700; color: #333; white-space: nowrap;
+    text-shadow: 0 0 2px #fff, 0 0 3px #fff, 0 0 5px #fff; pointer-events: none;
+  }
+  .stn { display: none; align-items: center; gap: 4px; pointer-events: none; }
+  body.z10 .stn { display: flex; }
+  .stn .dot {
+    width: 10px; height: 10px; border-radius: 50%; border: 2px solid #fff;
+    box-shadow: 0 0 3px rgba(0,0,0,.55); flex: none; box-sizing: border-box;
+  }
+  .stn .lbl {
+    font-size: 10px; font-weight: 600; color: #1a1a1a; white-space: nowrap;
+    text-shadow: 0 0 2px #fff, 0 0 3px #fff, 0 0 4px #fff;
+  }
+  .stn .t { display: none; color: #555; font-weight: 400; margin-left: 3px; }
+  body.z11 .stn .t { display: inline; }
+  .lm {
+    display: none; font-size: 10px; font-weight: 600; color: #8a5a00; white-space: nowrap;
+    text-shadow: 0 0 2px #fff, 0 0 3px #fff, 0 0 4px #fff; pointer-events: none;
+  }
+  body.zlm .lm { display: block; }
+  .homeMk { font-size: 20px; text-shadow: 0 0 3px #fff; }
+  #homeCard {
+    position: absolute; left: 10px; bottom: 30px; z-index: 10; display: none;
+    background: rgba(255,255,255,.95); border-radius: 8px; padding: 8px 10px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.25); font-size: 12px; max-width: 250px;
+  }
+  #homeCard .hcHead { display: flex; justify-content: space-between; align-items: center; }
+  #homeClear { border: none; background: none; cursor: pointer; font-size: 15px; color: #666; padding: 0 2px; }
 </style>
 </head>
 <body>
 <div id="map"></div>
 <div id="panel">
   <div class="panelHead">
-    <h1>北北桃房價地圖 <span class="muted">v1</span></h1>
+    <h1>北北桃房價地圖 <span class="muted">v1.1</span></h1>
     <button id="panelToggle" type="button" aria-expanded="true" aria-label="收合篩選條件">▾</button>
   </div>
   <div id="panelBody">
@@ -59,6 +103,11 @@
       <button data-v="unit" class="on">單價/坪</button>
       <button data-v="total">總價</button>
       <button data-v="n">成交量</button>
+      <button data-v="egg">蛋黃蛋白</button>
+    </div>
+    <div class="row" id="eggRow" style="display:none">
+      <label>蛋黃門檻：縣市內單價前 <b id="yolkLabel">20</b>%</label>
+      <input type="range" id="yolkSlider" min="5" max="50" step="5" value="20">
     </div>
     <div class="row seg" id="catSeg">
       <button data-c="all" class="on">全部</button>
@@ -70,20 +119,39 @@
       <input type="range" id="prMin" min="0" max="20000" step="100" value="0">
       <input type="range" id="prMax" min="0" max="20000" step="100" value="20000">
     </div>
+    <div class="row" id="lyrRow">
+      <label><input type="checkbox" id="chkLabels" checked> 地名</label>
+      <label><input type="checkbox" id="chkTowns" checked> 行政區</label>
+      <label><input type="checkbox" id="chkRail" checked> 軌道</label>
+      <label><input type="checkbox" id="chk3d"> 3D</label>
+    </div>
     <div class="row">
-      <label><input type="checkbox" id="chk3d"> 3D 高度起伏</label>
+      <button id="homeBtn" class="wide" type="button">📍 設定她家（點地圖）</button>
     </div>
     <div id="legend"></div>
+    <div class="muted">站名旁小字＝到台北車站約略時間（地圖放大後顯示）；
+      綠色虛線＝捷運綠線（興建中，站名旁標預計通車年）</div>
     <div class="muted" id="status"></div>
   </div>
 </div>
+<div id="homeCard">
+  <div class="hcHead"><b>🏠 她家</b><button id="homeClear" type="button" aria-label="清除她家基準">×</button></div>
+  <div id="homeBody"></div>
+</div>
 <div id="hoverbox"></div>
 
+<script src="overlays.js"></script>
 <script>
-const VIEWS = { unit: "單價中位數", total: "總價中位數", n: "成交筆數" };
+const VIEWS = { unit: "單價中位數", total: "總價中位數", n: "成交筆數", egg: "蛋黃蛋白" };
 const GRAY = "#c8c8c8";
 const RAMP = ["#ffffcc","#ffeda0","#fed976","#feb24c","#fd8d3c","#fc4e2a","#e31a1c","#b10026"];
-let view = "unit", cat = "all", geojson = null, breaks = [];
+const EGG = { yolk: "#f2a900", white: "#fbf3d9", shell: "#c7b299" };
+const CATS = ["all", "used", "presale"];
+const CAT_NAMES = { all: "全部", used: "中古", presale: "預售" };
+let view = "unit", cat = "all", geojson = null, breaks = [], yolkPct = 20;
+let rankData = {};            // cat -> county -> 由小到大排序的單價陣列
+let home = null, homeProps = null, homeMarker = null;
+const markers = { towns: [], stn: [], lm: [] };
 
 const map = new maplibregl.Map({
   container: "map",
@@ -94,18 +162,49 @@ const map = new maplibregl.Map({
         type: "raster",
         tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
         tileSize: 256,
-        attribution: "© OpenStreetMap contributors ｜ 資料：內政部實價登錄"
+        attribution: "© OpenStreetMap contributors ｜ © CARTO ｜ 資料：內政部實價登錄"
       }
     },
     layers: [{ id: "osm", type: "raster", source: "osm" }]
   },
-  center: [121.35, 25.0],
-  zoom: 9.3,
+  center: [121.28, 24.99],   // 主戰場是桃園，預設中心西移
+  zoom: 9.6,
   pitch: 0
 });
 
 function prop(suffix) { return `${cat}_${suffix}`; }
-function metricProp() { return prop(view); }
+function metricProp() { return view === "egg" ? prop("unit") : prop(view); }
+
+// 縣市內單價分位（0~1，越高越貴）；蛋黃蛋白視圖用
+function computeRanks() {
+  for (const c of CATS) {
+    const byCounty = {};
+    geojson.features.forEach(f => {
+      const p = f.properties;
+      if (!p[c + "_insufficient"] && p[c + "_unit"] != null)
+        (byCounty[p.county] ??= []).push(p[c + "_unit"]);
+    });
+    for (const k in byCounty) byCounty[k].sort((a, b) => a - b);
+    rankData[c] = byCounty;
+    geojson.features.forEach(f => {
+      const p = f.properties;
+      let pr = null;
+      if (!p[c + "_insufficient"] && p[c + "_unit"] != null) {
+        const arr = byCounty[p.county], v = p[c + "_unit"];
+        let lo = 0, hi = arr.length;
+        while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m] <= v) lo = m + 1; else hi = m; }
+        pr = lo / arr.length;
+      }
+      p[c + "_pr"] = pr;
+    });
+  }
+}
+
+function fmt(v) {
+  if (view === "n") return v + " 筆";
+  if (view === "total") return (v / 1e4).toFixed(0) + " 萬";
+  return (v / 1e4).toFixed(1) + " 萬/坪";
+}
 
 function computeBreaks() {
   const vals = geojson.features
@@ -119,25 +218,23 @@ function computeBreaks() {
   }
 }
 
-function fmt(v) {
-  if (view === "n") return v + " 筆";
-  if (view === "unit") return (v / 1e4).toFixed(1) + " 萬/坪";
-  return (v / 1e4).toFixed(0) + " 萬";
-}
-
 function paintExpr() {
   const m = ["get", metricProp()];
   const ins = ["get", prop("insufficient")];
   const total = ["get", prop("total")];
   const lo = +prMin.value * 1e4, hi = +prMax.value * 1e4;
+  const grayCond = ["any", ["==", ins, true], ["==", m, null],
+    ["all", ["!=", total, null], ["any", ["<", total, lo], [">", total, hi]]]];
+  if (view === "egg") {
+    const pr = ["get", prop("pr")];
+    return ["case", grayCond, GRAY,
+      [">=", pr, 1 - yolkPct / 100], EGG.yolk,
+      [">=", pr, 0.4], EGG.white,
+      EGG.shell];
+  }
   const colorStep = ["step", m, RAMP[0]];
   breaks.forEach((b, i) => colorStep.push(b, RAMP[i + 1]));
-  return ["case",
-    ["any", ["==", ins, true], ["==", m, null],
-      ["all", ["!=", total, null], ["any", ["<", total, lo], [">", total, hi]]]],
-    GRAY,
-    colorStep
-  ];
+  return ["case", grayCond, GRAY, colorStep];
 }
 
 function heightExpr() {
@@ -152,12 +249,32 @@ function restyle() {
   map.setPaintProperty("vill-fill", "fill-color", paintExpr());
   map.setPaintProperty("vill-3d", "fill-extrusion-color", paintExpr());
   map.setPaintProperty("vill-3d", "fill-extrusion-height", heightExpr());
+  eggRow.style.display = view === "egg" ? "block" : "none";
   renderLegend();
+  renderHome();
   prLabel.textContent = `${prMin.value} ~ ${prMax.value}`;
+}
+
+// 蛋黃門檻換算成各縣市的單價下限（圖例用）
+function yolkCut(county) {
+  const arr = (rankData[cat] || {})[county];
+  if (!arr || !arr.length) return "—";
+  const q = arr[Math.min(arr.length - 1, Math.floor(arr.length * (1 - yolkPct / 100)))];
+  return (q / 1e4).toFixed(0);
 }
 
 function renderLegend() {
   const el = document.getElementById("legend");
+  if (view === "egg") {
+    el.innerHTML =
+      `<b>蛋黃蛋白（各縣市內部單價分位）</b>` +
+      `<div class="lrow"><div class="swatch" style="background:${EGG.yolk}"></div>蛋黃：縣市內前 ${yolkPct}%</div>` +
+      `<div class="muted" style="margin-left:24px">北市≥${yolkCut("臺北市")}｜新北≥${yolkCut("新北市")}｜桃園≥${yolkCut("桃園市")} 萬/坪</div>` +
+      `<div class="lrow"><div class="swatch" style="background:${EGG.white}"></div>蛋白：前 ${yolkPct}~60%</div>` +
+      `<div class="lrow"><div class="swatch" style="background:${EGG.shell}"></div>蛋殼：後 40%</div>` +
+      `<div class="lrow"><div class="swatch" style="background:${GRAY}"></div>無資料 / 不足 / 範圍外</div>`;
+    return;
+  }
   let html = `<b>${VIEWS[view]}</b>`;
   let prev = null;
   RAMP.forEach((c, i) => {
@@ -173,12 +290,114 @@ function renderLegend() {
   el.innerHTML = html;
 }
 
+/* ---------- 她家基準 ---------- */
+function renderHome() {
+  const card = document.getElementById("homeCard");
+  if (!home || !homeProps) {
+    card.style.display = "none";
+    if (homeMarker) { homeMarker.remove(); homeMarker = null; }
+    return;
+  }
+  card.style.display = "block";
+  const u = homeProps[prop("unit")], t = homeProps[prop("total")], n = homeProps[prop("n")];
+  homeBody.innerHTML =
+    `${homeProps.county}${homeProps.town}${homeProps.village}<br>` +
+    `${CAT_NAMES[cat]}：單價 ${u != null ? (u / 1e4).toFixed(1) + " 萬/坪" : "—"}｜` +
+    `總價 ${t != null ? (t / 1e4).toFixed(0) + " 萬" : "—"}｜${n ?? 0} 筆` +
+    `<div class="muted">滑到其他里可看「相對她家」的比例</div>`;
+  if (!homeMarker && home.lngLat) {
+    const el = document.createElement("div");
+    el.className = "homeMk"; el.textContent = "🏠";
+    homeMarker = new maplibregl.Marker({ element: el, anchor: "bottom" })
+      .setLngLat(home.lngLat).addTo(map);
+  }
+}
+
+function loadHome() {
+  try { home = JSON.parse(localStorage.getItem("homeAnchor")); } catch (e) { home = null; }
+  homeProps = null;
+  if (home && home.villcode) {
+    const f = geojson.features.find(f => f.properties.villcode === home.villcode);
+    if (f) homeProps = f.properties; else home = null;
+  } else home = null;
+  renderHome();
+}
+
+let arming = false;
+function setArming(on) {
+  arming = on;
+  homeBtn.classList.toggle("arming", on);
+  homeBtn.textContent = on ? "點地圖上她家所在的里…（再按一次取消）" : "📍 設定她家（點地圖）";
+}
+
+/* ---------- 疊加圖層：行政區 / 軌道 / 地標 / 地名標籤 ---------- */
+function addOverlays(towns) {
+  map.addSource("towns", { type: "geojson", data: towns });
+  map.addLayer({ id: "towns-line", type: "line", source: "towns",
+    paint: { "line-color": "#3b3b3b", "line-width": 1.4, "line-opacity": 0.75 } });
+  towns.features.forEach(f => {
+    const el = document.createElement("div");
+    el.className = "townlbl"; el.textContent = f.properties.town;
+    markers.towns.push(new maplibregl.Marker({ element: el })
+      .setLngLat([f.properties.lab_lon, f.properties.lab_lat]).addTo(map));
+  });
+
+  RAIL_LINES.forEach(line => {
+    const paint = { "line-color": line.color, "line-width": 2.2, "line-opacity": 0.75 };
+    if (line.dashed) paint["line-dasharray"] = [2, 2];
+    map.addSource("rail-" + line.id, { type: "geojson", data: {
+      type: "Feature", properties: {},
+      geometry: { type: "LineString", coordinates: line.stations.map(s => s.c) } } });
+    map.addLayer({ id: "rail-" + line.id, type: "line", source: "rail-" + line.id, paint });
+    line.stations.forEach(s => {
+      if (s.hidden) return;
+      const el = document.createElement("div");
+      el.className = "stn";
+      el.innerHTML =
+        `<span class="dot" style="background:${line.color}${s.hsr ? ";box-shadow:0 0 0 2px #e8590c" : ""}"></span>` +
+        `<span class="lbl">${s.n}<span class="t">${s.sub}</span></span>`;
+      markers.stn.push(new maplibregl.Marker({ element: el, anchor: "left", offset: [-5, 0] })
+        .setLngLat(s.c).addTo(map));
+    });
+  });
+
+  LANDMARKS.forEach(l => {
+    const el = document.createElement("div");
+    el.className = "lm"; el.textContent = "★ " + l.n;
+    markers.lm.push(new maplibregl.Marker({ element: el, anchor: "left", offset: [2, 0] })
+      .setLngLat(l.c).addTo(map));
+  });
+
+  // 純標籤瓦片疊最上層：路名/地名浮在色塊上（外縣市可讀性關鍵）
+  map.addSource("carto", { type: "raster", tiles: [
+      "https://a.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}.png",
+      "https://b.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}.png",
+      "https://c.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}.png"],
+    tileSize: 256 });
+  map.addLayer({ id: "carto-labels", type: "raster", source: "carto",
+    paint: { "raster-opacity": 0.9 } });
+}
+
+function updateZoomClass() {
+  const z = map.getZoom();
+  document.body.classList.toggle("z10", z >= 9.8);
+  document.body.classList.toggle("zlm", z >= 10.3);
+  document.body.classList.toggle("z11", z >= 11);
+}
+map.on("zoom", updateZoomClass);
+updateZoomClass();
+
+/* ---------- 初始化 ---------- */
 let inited = false;
 async function init() {
   if (inited) return;
   inited = true;
-  const r = await fetch("../data/processed/map_data.geojson");
-  geojson = await r.json();
+  const [gjRes, twRes] = await Promise.all([
+    fetch("../data/processed/map_data.geojson"),
+    fetch("../data/processed/towns.geojson").catch(() => null),
+  ]);
+  geojson = await gjRes.json();
+  computeRanks();
   map.addSource("vill", { type: "geojson", data: geojson });
   map.addLayer({ id: "vill-fill", type: "fill", source: "vill",
     paint: { "fill-color": GRAY, "fill-opacity": 0.72 } });
@@ -188,30 +407,68 @@ async function init() {
     layout: { visibility: "none" },
     paint: { "fill-extrusion-color": GRAY, "fill-extrusion-height": 0,
              "fill-extrusion-opacity": 0.85 } });
+  try {
+    if (twRes && twRes.ok) addOverlays(await twRes.json());
+  } catch (e) { console.warn("疊加圖層載入失敗", e); }
+  loadHome();
   restyle();
-  document.getElementById("status").textContent =
-    `里數 ${geojson.features.length}`;
+  document.getElementById("status").textContent = `里數 ${geojson.features.length}`;
 
   const box = document.getElementById("hoverbox");
   map.on("mousemove", "vill-fill", e => {
     const p = e.features[0].properties;
     const u = p[prop("unit")], t = p[prop("total")], n = p[prop("n")];
+    let extra = "";
+    if (view === "egg") {
+      const pr = p[prop("pr")];
+      if (pr != null) {
+        const topPct = Math.max(1, Math.round((1 - pr) * 100));
+        const cls = pr >= 1 - yolkPct / 100 ? "蛋黃" : pr >= 0.4 ? "蛋白" : "蛋殼";
+        extra += `縣市內單價排名：前 ${topPct}%（${cls}）<br>`;
+      }
+    }
+    if (homeProps) {
+      if (p.villcode === homeProps.villcode) {
+        extra += `<span class="ratio">🏠 她家</span><br>`;
+      } else {
+        let hu = p[prop("unit")], hh = homeProps[prop("unit")];
+        if (hu == null || hh == null) { hu = p.all_unit; hh = homeProps.all_unit; }
+        if (hu != null && hh != null) {
+          const r = hu / hh;
+          extra += `<span class="ratio">約為她家單價的 ${r >= 1.5 ? r.toFixed(1) + " 倍" : Math.round(r * 100) + "%"}</span><br>`;
+        }
+      }
+    }
     box.style.display = "block";
     box.style.left = (e.point.x + 14) + "px";
     box.style.top = (e.point.y + 14) + "px";
     box.innerHTML = `<b>${p.county}${p.town}${p.village}</b><br>` +
-      (p[prop("insufficient")] ? "成交不足（灰色）<br>" : "") +
+      (p[prop("insufficient")] ? "成交不足（灰色）<br>" : "") + extra +
       `單價中位數：${u != null ? (u/1e4).toFixed(1) + " 萬/坪" : "—"}<br>` +
       `總價中位數：${t != null ? (t/1e4).toFixed(0) + " 萬" : "—"}<br>` +
       `成交筆數：${n ?? 0}`;
   });
   map.on("mouseleave", "vill-fill", () => box.style.display = "none");
+
+  map.on("click", "vill-fill", e => {
+    if (!arming) return;
+    const p = e.features[0].properties;
+    const f = geojson.features.find(f => f.properties.villcode === p.villcode);
+    if (!f) return;
+    home = { villcode: p.villcode, lngLat: [e.lngLat.lng, e.lngLat.lat] };
+    homeProps = f.properties;
+    if (homeMarker) { homeMarker.remove(); homeMarker = null; }
+    localStorage.setItem("homeAnchor", JSON.stringify(home));
+    setArming(false);
+    renderHome();
+  });
 }
 // 瓦片源被擋或很慢時 load 不會觸發，改在 style.load 即初始化資料圖層
 map.on("style.load", init);
 map.on("load", init);
 setTimeout(() => { if (map.isStyleLoaded()) init(); }, 3000);
 
+/* ---------- 控制項 ---------- */
 viewSeg.onclick = e => {
   if (!e.target.dataset.v) return;
   view = e.target.dataset.v;
@@ -228,12 +485,41 @@ prMin.oninput = prMax.oninput = () => {
   if (+prMin.value > +prMax.value) prMin.value = prMax.value;
   restyle();
 };
+yolkSlider.oninput = () => {
+  yolkPct = +yolkSlider.value;
+  yolkLabel.textContent = yolkPct;
+  restyle();
+};
 chk3d.onchange = () => {
   const on = chk3d.checked;
   map.setLayoutProperty("vill-3d", "visibility", on ? "visible" : "none");
   map.setLayoutProperty("vill-fill", "visibility", on ? "none" : "visible");
   map.easeTo({ pitch: on ? 50 : 0 });
   restyle();
+};
+chkLabels.onchange = () => {
+  if (map.getLayer("carto-labels"))
+    map.setLayoutProperty("carto-labels", "visibility", chkLabels.checked ? "visible" : "none");
+};
+chkTowns.onchange = () => {
+  const on = chkTowns.checked;
+  if (map.getLayer("towns-line"))
+    map.setLayoutProperty("towns-line", "visibility", on ? "visible" : "none");
+  markers.towns.forEach(m => m.getElement().style.visibility = on ? "visible" : "hidden");
+};
+chkRail.onchange = () => {
+  const on = chkRail.checked;
+  RAIL_LINES.forEach(l => {
+    if (map.getLayer("rail-" + l.id))
+      map.setLayoutProperty("rail-" + l.id, "visibility", on ? "visible" : "none");
+  });
+  [...markers.stn, ...markers.lm].forEach(m => m.getElement().style.visibility = on ? "visible" : "hidden");
+};
+homeBtn.onclick = () => setArming(!arming);
+homeClear.onclick = () => {
+  home = null; homeProps = null;
+  localStorage.removeItem("homeAnchor");
+  renderHome();
 };
 
 function setPanelCollapsed(collapsed) {
