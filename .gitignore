@@ -3,3 +3,5 @@ data/raw/
 __pycache__/
 *.pyc
 .claude/scheduled_tasks.lock
+.vs/
+*.log
