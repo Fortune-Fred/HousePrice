@@ -20,6 +20,7 @@ STEPS = [
     ("Geocode 與歸里（吃快取）", ["pipeline/geocode.py"]),
     ("聚合輸出 GeoJSON", ["pipeline/aggregate.py"]),
     ("供需風險分級", ["pipeline/risk.py"]),
+    ("保值分析", ["pipeline/value.py"]),
 ]
 
 

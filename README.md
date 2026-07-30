@@ -32,9 +32,10 @@ geocode（純資料工作，不需要 AI，照下面指令跑完即可）。
 - `pipeline/` 下載、解析、清洗、geocode、聚合腳本
 - `data/raw/` 原始 CSV（gitignore）；`data/processed/` parquet 與 GeoJSON
 - `reports/` 清洗、geocode 評估與歸里報告
-- `web/` MapLibre 靜態地圖（單價/總價/成交量/蛋黃蛋白/供需風險五視圖、預售/中古切換、
-  總價滑桿、3D、行政區界與區名、桃園軌道站點含到北車時間、地標、
-  「她家基準」相對價比較；`overlays.js` 為站點地標靜態資料）
+- `web/` MapLibre 靜態地圖（單價/總價/成交量/蛋黃蛋白/供需風險/保值六視圖、
+  預售/中古切換、總價滑桿、3D、行政區界與區名、桃園軌道站點含到北車時間、地標、
+  「她家基準」相對價比較、行政區/里搜尋框、縮放連動粒度（遠看行政區、近看里）；
+  `overlays.js` 為站點地標靜態資料）
   - 網址加 `?rafshim=1` 可在無 rAF 的環境（如 Claude 瀏覽器面板）強制渲染，供自動化驗證
 
 ## 風險資料更新（供需風險視圖）
@@ -58,5 +59,15 @@ F5 反爬（TSPD），`requests`/`curl` 會被擋，只能經真實瀏覽器下�
          });
    ```
 2. 下載的檔案放進 `data/raw/risk/pip/`，重跑 `python pipeline/risk.py`。
-3. 更新頻率：低度用電每半年（2月/7月出刊）、待售新成屋每季；沒更新也能跑，
-   risk.py 自動取目錄內最新期別。
+3. 建照/使照（第六旗標）同站主題下載區，同樣需經瀏覽器：
+   `/Publicize/Info/E4041?m=csv&k=K02&n=T17`（建照）與 `n=T21`（使照），
+   存成 `LIC_T17_permit.csv` / `LIC_T21_usage.csv`（北北桃列即可）放同目錄。
+4. 更新頻率：低度用電每半年（2月/7月出刊）、待售新成屋與建照使照每季；
+   沒更新也能跑，risk.py 自動取目錄內最新期別。
+
+## 保值分析（保值視圖）
+
+`pipeline/value.py` 使用 `data/raw/{季}/` 全部季度（101S3 起，`download.py --range
+101S3:115S2` 可補齊）計算行政區級 10/5 年年化漲幅、2022–23 修正期回檔與租金報酬率
+（租賃 `_c` 檔近 12 季），輸出 `value_towns.json` 與 `reports/value_report.md`。
+每季 update.py 會自動重算；歷史季度檔勿刪（gitignore，但保值分析依賴它們）。

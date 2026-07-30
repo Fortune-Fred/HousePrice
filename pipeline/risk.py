@@ -16,7 +16,11 @@
   旗標 hh     戶數年增率 ≤ 0
   旗標 vol    成交量近 4 季較前 4 季 ≤ -20%
   旗標 cancel 預售解約率 ≥ P75（樣本 ≥ 100 件才計）
-  紅 = ≥3 旗標；黃 = 2；綠 = ≤1（指標缺漏不計旗標，hover 顯示「—」）
+  旗標 pipe   每千戶建照宅數（近 12 季，未來供給管線）≥ P75
+  紅 = ≥4 旗標；黃 = 2~3；綠 = ≤1（指標缺漏不計旗標，hover 顯示「—」）
+
+第 6 項資料：data/raw/risk/pip/LIC_T17_permit.csv（建照）/ LIC_T21_usage.csv（使照），
+來源同 pip 平台（E4041 主題下載區，行政區×季，098Q1 起）。
 """
 import csv
 import json
@@ -65,6 +69,25 @@ def load_pip(prefix: str):
             rate = float(r[3]) if len(r) > 3 and r[3] not in ("", "-") else None
             out.setdefault(period, {})[(county, town)] = (n, rate)
     return out
+
+
+def load_lic(fname: str, quarters: int = 12):
+    """建照/使照 CSV → ({(county, town): 近 N 季宅數合計}, 窗口字串)。"""
+    f = PIP_DIR / fname
+    if not f.exists():
+        return {}, None
+    rows = list(csv.reader(f.read_text(encoding="utf-8-sig").splitlines()))
+    periods = sorted({r[0] for r in rows[1:] if r}, key=period_key)[-quarters:]
+    out = {}
+    for r in rows[1:]:
+        if not r or r[0] not in periods:
+            continue
+        site = norm_county(r[1])
+        county, town = site[:3], site[3:]
+        if county in CITIES and town:
+            n = int(r[2].replace(",", "") or 0)
+            out[(county, town)] = out.get((county, town), 0) + n
+    return out, f"{periods[0]}~{periods[-1]}" if periods else None
 
 
 # ---------- 3. RIS 戶數（村里 → 行政區） ----------
@@ -181,6 +204,8 @@ def main():
     hh_prev = households_by_town(ris_fetch(hh_prev_p) or [])
 
     vol, cx, windows = own_metrics()
+    permits, lic_window = load_lic("LIC_T17_permit.csv")
+    usages, _ = load_lic("LIC_T21_usage.csv")
 
     rows = {}
     for key in all_towns:
@@ -199,6 +224,10 @@ def main():
             "unsold1k": round(uns[0] / hh * 1000, 2) if uns and hh else None,
             "hh": hh,
             "hh_yoy": round((hh - hhp) / hhp * 100, 2) if hh and hhp else None,
+            "permit3y": permits.get(key),
+            "permit1k": round(permits[key] / hh * 1000, 1)
+                        if key in permits and hh else None,
+            "usage3y": usages.get(key),
             **vol.get(key, {"vol_recent": 0, "vol_prior": 0, "vol_chg": None}),
             **cx.get(key, {"presale_n": 0, "cancel_n": 0, "cancel_rate": None}),
         }
@@ -207,6 +236,7 @@ def main():
         "vac_p75": p75([r["vac"] for r in rows.values()]),
         "unsold1k_p75": p75([r["unsold1k"] for r in rows.values()]),
         "cancel_p75": p75([r["cancel_rate"] for r in rows.values()]),
+        "permit1k_p75": p75([r["permit1k"] for r in rows.values()]),
     }
     for r in rows.values():
         flags = []
@@ -220,8 +250,12 @@ def main():
             flags.append("vol")
         if r["cancel_rate"] is not None and r["cancel_rate"] >= th["cancel_p75"]:
             flags.append("cancel")
+        if r["permit1k"] is not None and th["permit1k_p75"] is not None \
+                and r["permit1k"] >= th["permit1k_p75"]:
+            flags.append("pipe")
         r["flags"] = flags
-        r["level"] = "red" if len(flags) >= 3 else "yellow" if len(flags) == 2 else "green"
+        r["level"] = ("red" if len(flags) >= 4
+                      else "yellow" if len(flags) >= 2 else "green")
 
     out = {
         "meta": {
@@ -230,6 +264,7 @@ def main():
             "hh_period": hh_p, "hh_prev_period": hh_prev_p,
             "vol_recent": windows["recent"], "vol_prior": windows["prior"],
             "cancel_window": windows["cancel_window"],
+            "lic_window": lic_window,
             "generated": date.today().isoformat(),
         },
         "thresholds": th,
@@ -241,7 +276,7 @@ def main():
     for (c, t), r in rows.items():
         levels[r["level"]].append(f"{c}{t}（{'、'.join(r['flags']) or '無旗標'}）")
     flag_names = {"vac": "空屋率高", "unsold": "餘屋壓力大", "hh": "戶數負成長",
-                  "vol": "量縮逾兩成", "cancel": "解約率高"}
+                  "vol": "量縮逾兩成", "cancel": "解約率高", "pipe": "供給管線大"}
     REPORT.parent.mkdir(exist_ok=True)
     REPORT.write_text(
         f"""# 供需風險分級報告
@@ -256,11 +291,13 @@ def main():
 | 戶數年增率 | {hh_p} vs {hh_prev_p} | 戶政司 ODRP014 |
 | 成交量動能 | 近4季 {windows['recent']} vs 前4季 {windows['prior']} | 自有實價登錄 |
 | 預售解約率 | {windows['cancel_window'][0]}~{windows['cancel_window'][-1]} | 自有實價登錄（解約情形欄） |
+| 建照宅數（供給管線） | {lic_window} | pip E4041 主題下載區 |
 
 ## 分級規則
-五旗標：空屋率≥P75（{th['vac_p75']}%）、每千戶餘屋≥P75（{th['unsold1k_p75']}）、
-戶數年增率≤0、量縮≤-20%、解約率≥P75（{th['cancel_p75']}%，樣本≥100）。
-紅=≥3旗標、黃=2、綠=≤1。旗標名稱：{flag_names}。
+六旗標：空屋率≥P75（{th['vac_p75']}%）、每千戶餘屋≥P75（{th['unsold1k_p75']}）、
+戶數年增率≤0、量縮≤-20%、解約率≥P75（{th['cancel_p75']}%，樣本≥100）、
+每千戶建照≥P75（{th['permit1k_p75']}）。
+紅=≥4旗標、黃=2~3、綠=≤1。旗標名稱：{flag_names}。
 
 ## 結果
 - 紅（{len(levels['red'])}）：{'；'.join(levels['red']) or '無'}

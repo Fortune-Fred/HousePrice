@@ -103,8 +103,14 @@ if (new URLSearchParams(location.search).has("rafshim")) {
       <button data-v="unit" class="on">單價/坪</button>
       <button data-v="total">總價</button>
       <button data-v="n">成交量</button>
-      <button data-v="egg" style="flex-basis:48%">蛋黃蛋白</button>
-      <button data-v="risk" style="flex-basis:48%">供需風險</button>
+      <button data-v="egg" style="flex-basis:31%">蛋黃蛋白</button>
+      <button data-v="risk" style="flex-basis:31%">供需風險</button>
+      <button data-v="value" style="flex-basis:31%">保值</button>
+    </div>
+    <div class="row">
+      <input id="searchBox" list="placeList" placeholder="🔍 搜尋行政區或里（如：中壢、青埔里）"
+        style="width:100%;box-sizing:border-box;padding:5px 8px;border:1px solid #bbb;border-radius:4px;font-size:12px">
+      <datalist id="placeList"></datalist>
     </div>
     <div class="row" id="eggRow" style="display:none">
       <label>蛋黃門檻：縣市內單價前 <b id="yolkLabel">20</b>%</label>
@@ -143,13 +149,16 @@ if (new URLSearchParams(location.search).has("rafshim")) {
 
 <script src="overlays.js"></script>
 <script>
-const VIEWS = { unit: "單價中位數", total: "總價中位數", n: "成交筆數", egg: "蛋黃蛋白", risk: "供需風險" };
+const VIEWS = { unit: "單價中位數", total: "總價中位數", n: "成交筆數", egg: "蛋黃蛋白", risk: "供需風險", value: "保值（年化漲幅）" };
+const VALUE_BINS = [2, 4, 6, 8];                       // cagr10 %
+const VALUE_RAMP = ["#f1eef6", "#d7b5d8", "#df65b0", "#dd1c77", "#980043"];
+const TOWN_ZOOM = 9.9;                                 // 低於此縮放 → 行政區概覽
 const GRAY = "#c8c8c8";
 const RAMP = ["#ffffcc","#ffeda0","#fed976","#feb24c","#fd8d3c","#fc4e2a","#e31a1c","#b10026"];
 const EGG = { yolk: "#f2a900", white: "#fbf3d9", shell: "#c7b299" };
 const RISK = { red: "#d9534f", yellow: "#f0ad4e", green: "#94c47a" };
-const FLAG_NAMES = { vac: "空屋率高", unsold: "餘屋壓力", hh: "戶數負成長", vol: "量縮", cancel: "解約率高" };
-let riskData = null;
+const FLAG_NAMES = { vac: "空屋率高", unsold: "餘屋壓力", hh: "戶數負成長", vol: "量縮", cancel: "解約率高", pipe: "供給管線大" };
+let riskData = null, valueData = null, townsGJ = null, inited = false;
 const CATS = ["all", "used", "presale"];
 const CAT_NAMES = { all: "全部", used: "中古", presale: "預售" };
 let view = "unit", cat = "all", geojson = null, breaks = [], yolkPct = 20;
@@ -248,15 +257,51 @@ function heightExpr() {
     ["*", ["/", m, max], 3000]];
 }
 
+// 目前是否處於「行政區模式」：風險/保值視圖恆為行政區；
+// 三個基本視圖在低縮放時切為行政區概覽（縮放連動粒度）
+function inTownMode() {
+  return view === "risk" || view === "value" ||
+    (["unit", "total", "n"].includes(view) && !chk3d.checked &&
+     map.getZoom() < TOWN_ZOOM);
+}
+
+function townBreaks() {
+  if (!townsGJ) return [];
+  const vals = townsGJ.features.map(f => f.properties["v_" + view])
+    .filter(v => v != null && isFinite(v)).sort((a, b) => a - b);
+  const b = [];
+  for (let i = 1; i < RAMP.length; i++)
+    b.push(vals[Math.floor(vals.length * i / RAMP.length)]);
+  return b;
+}
+
+function townPaintExpr() {
+  if (view === "risk")
+    return ["match", ["coalesce", ["get", "risk_level"], "x"],
+      "red", RISK.red, "yellow", RISK.yellow, "green", RISK.green, GRAY];
+  if (view === "value") {
+    const m = ["get", "v_cagr10"];
+    const step = ["step", m, VALUE_RAMP[0]];
+    VALUE_BINS.forEach((b, i) => step.push(b, VALUE_RAMP[i + 1]));
+    return ["case", ["==", m, null], GRAY, step];
+  }
+  const m = ["get", "v_" + view];
+  const step = ["step", m, RAMP[0]];
+  townBreaks().forEach((b, i) => step.push(b, RAMP[i + 1]));
+  return ["case", ["==", m, null], GRAY, step];
+}
+
 function restyle() {
-  const isRisk = view === "risk";
-  if (map.getLayer("towns-fill"))
-    map.setLayoutProperty("towns-fill", "visibility", isRisk ? "visible" : "none");
+  const townMode = inTownMode();
+  if (map.getLayer("towns-fill")) {
+    map.setLayoutProperty("towns-fill", "visibility", townMode ? "visible" : "none");
+    if (townMode) map.setPaintProperty("towns-fill", "fill-color", townPaintExpr());
+  }
   map.setLayoutProperty("vill-fill", "visibility",
-    isRisk || chk3d.checked ? "none" : "visible");
+    townMode || chk3d.checked ? "none" : "visible");
   map.setLayoutProperty("vill-3d", "visibility",
-    !isRisk && chk3d.checked ? "visible" : "none");
-  if (!isRisk) {
+    !townMode && chk3d.checked ? "visible" : "none");
+  if (view !== "risk" && view !== "value") {
     computeBreaks();
     map.setPaintProperty("vill-fill", "fill-color", paintExpr());
     map.setPaintProperty("vill-3d", "fill-extrusion-color", paintExpr());
@@ -278,16 +323,30 @@ function yolkCut(county) {
 
 function renderLegend() {
   const el = document.getElementById("legend");
+  if (view === "value") {
+    if (!valueData) { el.innerHTML = "<b>保值</b><div class='muted'>value_towns.json 未產出</div>"; return; }
+    let html = `<b>保值：10 年年化漲幅（行政區）</b>`;
+    const labels = [`< ${VALUE_BINS[0]}%`,
+      ...VALUE_BINS.slice(0, -1).map((b, i) => `${b} ~ ${VALUE_BINS[i + 1]}%`),
+      `≥ ${VALUE_BINS[VALUE_BINS.length - 1]}%`];
+    VALUE_RAMP.forEach((c, i) =>
+      html += `<div class="lrow"><div class="swatch" style="background:${c}"></div>每年 ${labels[i]}</div>`);
+    html += `<div class="lrow"><div class="swatch" style="background:${GRAY}"></div>樣本不足</div>` +
+      `<div class="muted">hover 另含 5 年漲幅、2022–23 修正期回檔、租金報酬率</div>` +
+      `<div class="muted">資料：${valueData.meta.seasons[0]}~${valueData.meta.seasons[1]} 行政區中位數</div>`;
+    el.innerHTML = html;
+    return;
+  }
   if (view === "risk") {
     if (!riskData) { el.innerHTML = "<b>供需風險</b><div class='muted'>risk_towns.json 未產出</div>"; return; }
     const m = riskData.meta, th = riskData.thresholds;
     el.innerHTML =
-      `<b>供需風險（行政區五旗標）</b>` +
-      `<div class="lrow"><div class="swatch" style="background:${RISK.red}"></div>紅：≥3 個風險旗標</div>` +
-      `<div class="lrow"><div class="swatch" style="background:${RISK.yellow}"></div>黃：2 個</div>` +
+      `<b>供需風險（行政區六旗標）</b>` +
+      `<div class="lrow"><div class="swatch" style="background:${RISK.red}"></div>紅：≥4 個風險旗標</div>` +
+      `<div class="lrow"><div class="swatch" style="background:${RISK.yellow}"></div>黃：2~3 個</div>` +
       `<div class="lrow"><div class="swatch" style="background:${RISK.green}"></div>綠：≤1 個</div>` +
       `<div class="muted">旗標：空屋率≥${th.vac_p75}%｜每千戶餘屋≥${th.unsold1k_p75}｜` +
-      `戶數年增≤0｜量縮≤-20%｜解約率≥${th.cancel_p75}%</div>` +
+      `戶數年增≤0｜量縮≤-20%｜解約率≥${th.cancel_p75}%｜每千戶建照≥${th.permit1k_p75}</div>` +
       `<div class="muted">資料：空屋${m.vac_period}｜餘屋${m.unsold_period}｜戶數${m.hh_period}｜` +
       `量能近4季至${m.vol_recent[m.vol_recent.length-1]}</div>`;
     return;
@@ -314,6 +373,8 @@ function renderLegend() {
     html += `<div class="lrow"><div class="swatch" style="background:${c}"></div>${t}</div>`;
   });
   html += `<div class="lrow"><div class="swatch" style="background:${GRAY}"></div>無資料 / 不足 / 範圍外</div>`;
+  if (inTownMode())
+    html += `<div class="muted">目前為行政區概覽（近 4 季中位數），放大地圖顯示里</div>`;
   el.innerHTML = html;
 }
 
@@ -359,12 +420,21 @@ function setArming(on) {
 
 /* ---------- 疊加圖層：行政區 / 軌道 / 地標 / 地名標籤 ---------- */
 function addOverlays(towns) {
-  if (riskData) {
-    towns.features.forEach(f => {
-      const r = riskData.towns[f.properties.county + "|" + f.properties.town];
-      if (r) { f.properties.risk_level = r.level; f.properties.risk = JSON.stringify(r); }
-    });
-  }
+  townsGJ = towns;
+  towns.features.forEach(f => {
+    const key = f.properties.county + "|" + f.properties.town;
+    const r = riskData && riskData.towns[key];
+    if (r) { f.properties.risk_level = r.level; f.properties.risk = JSON.stringify(r); }
+    const v = valueData && valueData.towns[key];
+    if (v) {
+      f.properties.v_cagr10 = v.cagr10;
+      f.properties.value = JSON.stringify(v);
+      // 概覽指標換成與里資料同單位（元），沿用 fmt()
+      if (v.unit_now != null) f.properties.v_unit = v.unit_now * 1e4;
+      if (v.total_now != null) f.properties.v_total = v.total_now * 1e4;
+      if (v.n4 != null) f.properties.v_n = v.n4;
+    }
+  });
   map.addSource("towns", { type: "geojson", data: towns });
   map.addLayer({ id: "towns-fill", type: "fill", source: "towns",
     layout: { visibility: "none" },
@@ -416,27 +486,76 @@ function addOverlays(towns) {
     paint: { "raster-opacity": 0.9 } });
 }
 
+let lastTownMode = null;
 function updateZoomClass() {
   const z = map.getZoom();
   document.body.classList.toggle("z10", z >= 9.8);
   document.body.classList.toggle("zlm", z >= 10.3);
   document.body.classList.toggle("z11", z >= 11);
+  // 跨越行政區/里門檻時重繪（縮放連動粒度）
+  if (inited) {
+    const tm = inTownMode();
+    if (tm !== lastTownMode) { lastTownMode = tm; restyle(); }
+  }
 }
 map.on("zoom", updateZoomClass);
 updateZoomClass();
 
+/* ---------- 搜尋（行政區/里，純前端） ---------- */
+function setupSearch() {
+  const dl = document.getElementById("placeList");
+  const index = {};   // 顯示名 -> {c: lngLat, z: zoom}
+  const bboxCenter = geom => {
+    let minX = 180, minY = 90, maxX = -180, maxY = -90;
+    const walk = c => {
+      if (typeof c[0] === "number") {
+        minX = Math.min(minX, c[0]); maxX = Math.max(maxX, c[0]);
+        minY = Math.min(minY, c[1]); maxY = Math.max(maxY, c[1]);
+      } else c.forEach(walk);
+    };
+    walk(geom.coordinates);
+    return [(minX + maxX) / 2, (minY + maxY) / 2];
+  };
+  if (townsGJ) townsGJ.features.forEach(f => {
+    const p = f.properties;
+    index[p.county + p.town] = { c: [p.lab_lon, p.lab_lat], z: 11.6 };
+  });
+  geojson.features.forEach(f => {
+    const p = f.properties;
+    index[p.county + p.town + p.village] = { c: bboxCenter(f.geometry), z: 13.5 };
+  });
+  const frag = document.createDocumentFragment();
+  Object.keys(index).forEach(name => {
+    const o = document.createElement("option");
+    o.value = name;
+    frag.appendChild(o);
+  });
+  dl.appendChild(frag);
+  searchBox.onchange = () => {
+    const q = searchBox.value.trim();
+    if (!q) return;
+    let hit = index[q];
+    if (!hit) {
+      const key = Object.keys(index).find(k => k.includes(q));
+      if (key) hit = index[key];
+    }
+    if (hit) { map.flyTo({ center: hit.c, zoom: hit.z }); searchBox.blur(); }
+  };
+}
+
 /* ---------- 初始化 ---------- */
-let inited = false;
 async function init() {
   if (inited) return;
   inited = true;
-  const [gjRes, twRes, rkRes] = await Promise.all([
+  const [gjRes, twRes, rkRes, vlRes] = await Promise.all([
     fetch("../data/processed/map_data.geojson"),
     fetch("../data/processed/towns.geojson").catch(() => null),
     fetch("../data/processed/risk_towns.json").catch(() => null),
+    fetch("../data/processed/value_towns.json").catch(() => null),
   ]);
   geojson = await gjRes.json();
   try { if (rkRes && rkRes.ok) riskData = await rkRes.json(); } catch (e) {}
+  try { if (vlRes && vlRes.ok) valueData = await vlRes.json(); } catch (e) {}
   computeRanks();
   map.addSource("vill", { type: "geojson", data: geojson });
   map.addLayer({ id: "vill-fill", type: "fill", source: "vill",
@@ -451,6 +570,7 @@ async function init() {
     if (twRes && twRes.ok) addOverlays(await twRes.json());
   } catch (e) { console.warn("疊加圖層載入失敗", e); }
   loadHome();
+  setupSearch();
   restyle();
   document.getElementById("status").textContent = `里數 ${geojson.features.length}`;
 
@@ -492,26 +612,48 @@ async function init() {
 
   map.on("mousemove", "towns-fill", e => {
     const p = e.features[0].properties;
-    let r = null;
-    try { r = p.risk ? JSON.parse(p.risk) : null; } catch (err) {}
     box.style.display = "block";
     box.style.left = (e.point.x + 14) + "px";
     box.style.top = (e.point.y + 14) + "px";
-    if (!r) {
-      box.innerHTML = `<b>${p.county}${p.town}</b><br>無風險資料`;
+    const head = `<b>${p.county}${p.town}</b><br>`;
+    const sign = v => (v >= 0 ? "+" : "") + v;
+    if (view === "value") {
+      let v = null;
+      try { v = p.value ? JSON.parse(p.value) : null; } catch (err) {}
+      if (!v) { box.innerHTML = head + "樣本不足"; return; }
+      box.innerHTML = head +
+        `10 年年化：${v.cagr10 != null ? sign(v.cagr10) + "%/年" : "—"}` +
+        `｜5 年：${v.cagr5 != null ? sign(v.cagr5) + "%/年" : "—"}<br>` +
+        `單價：${v.unit_10y ?? "—"} → ${v.unit_now ?? "—"} 萬/坪（10 年）<br>` +
+        `2022–23 修正期回檔：${v.dd2223 != null ? v.dd2223 + "%" : "—"}<br>` +
+        `租金報酬率：${v.yield != null ? v.yield + "%/年（月租 " + v.rent_unit + " 元/坪）" : "租賃樣本不足"}`;
       return;
     }
-    const lvName = { red: "🔴 紅", yellow: "🟡 黃", green: "🟢 綠" }[r.level];
-    box.innerHTML = `<b>${p.county}${p.town}</b><br>` +
-      `${lvName}（旗標 ${r.flags.length}：${r.flags.map(f => FLAG_NAMES[f]).join("、") || "無"}）<br>` +
-      `空屋率：${r.vac ?? "—"}%（上期 ${r.vac_prev ?? "—"}%）<br>` +
-      `待售新成屋：${r.unsold?.toLocaleString() ?? "—"} 宅` +
-      `${r.unsold_yoy != null ? "（年增" + (r.unsold_yoy >= 0 ? "+" : "") + r.unsold_yoy + "）" : ""}` +
-      `｜每千戶 ${r.unsold1k ?? "—"}<br>` +
-      `戶數年增：${r.hh_yoy != null ? (r.hh_yoy >= 0 ? "+" : "") + r.hh_yoy + "%" : "—"}<br>` +
-      `成交量近4季 vs 前4季：${r.vol_chg != null ? (r.vol_chg >= 0 ? "+" : "") + r.vol_chg + "%" : "—"}` +
-      `（${r.vol_recent} vs ${r.vol_prior} 筆）<br>` +
-      `預售解約率：${r.cancel_rate != null ? r.cancel_rate + "%（" + r.cancel_n + "/" + r.presale_n + "）" : "樣本不足"}`;
+    if (view === "risk") {
+      let r = null;
+      try { r = p.risk ? JSON.parse(p.risk) : null; } catch (err) {}
+      if (!r) { box.innerHTML = head + "無風險資料"; return; }
+      const lvName = { red: "🔴 紅", yellow: "🟡 黃", green: "🟢 綠" }[r.level];
+      box.innerHTML = head +
+        `${lvName}（旗標 ${r.flags.length}：${r.flags.map(f => FLAG_NAMES[f]).join("、") || "無"}）<br>` +
+        `空屋率：${r.vac ?? "—"}%（上期 ${r.vac_prev ?? "—"}%）<br>` +
+        `待售新成屋：${r.unsold?.toLocaleString() ?? "—"} 宅` +
+        `${r.unsold_yoy != null ? "（年增" + sign(r.unsold_yoy) + "）" : ""}` +
+        `｜每千戶 ${r.unsold1k ?? "—"}<br>` +
+        `建照近3年：${r.permit3y?.toLocaleString() ?? "—"} 宅｜每千戶 ${r.permit1k ?? "—"}` +
+        `｜使照 ${r.usage3y?.toLocaleString() ?? "—"}<br>` +
+        `戶數年增：${r.hh_yoy != null ? sign(r.hh_yoy) + "%" : "—"}<br>` +
+        `成交量近4季 vs 前4季：${r.vol_chg != null ? sign(r.vol_chg) + "%" : "—"}` +
+        `（${r.vol_recent} vs ${r.vol_prior} 筆）<br>` +
+        `預售解約率：${r.cancel_rate != null ? r.cancel_rate + "%（" + r.cancel_n + "/" + r.presale_n + "）" : "樣本不足"}`;
+      return;
+    }
+    // 基本視圖的行政區概覽
+    box.innerHTML = head +
+      `單價中位數：${p.v_unit != null ? (p.v_unit / 1e4).toFixed(1) + " 萬/坪" : "—"}<br>` +
+      `總價中位數：${p.v_total != null ? (p.v_total / 1e4).toFixed(0) + " 萬" : "—"}<br>` +
+      `成交筆數（近4季）：${p.v_n ?? "—"}<br>` +
+      `<span class="muted" style="color:#bbb">放大地圖看里</span>`;
   });
   map.on("mouseleave", "towns-fill", () => box.style.display = "none");
 

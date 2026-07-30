@@ -17,8 +17,8 @@ import requests
 
 RAW_DIR = Path(__file__).resolve().parent.parent / "data" / "raw"
 URL_TMPL = "https://plvr.land.moi.gov.tw/DownloadSeason?season={season}&type=zip&fileName=lvr_landcsv.zip"
-# A=台北市 F=新北市 H=桃園市；_a=中古買賣、_b=預售屋
-WANTED = [f"{c}_lvr_land_{t}.csv" for c in "afh" for t in "ab"]
+# A=台北市 F=新北市 H=桃園市；_a=中古買賣、_b=預售屋、_c=租賃（保值/租金報酬分析用）
+WANTED = [f"{c}_lvr_land_{t}.csv" for c in "afh" for t in "abc"]
 
 
 def season_candidates(n: int) -> list[str]:
@@ -65,11 +65,34 @@ def download_season(season: str) -> bool:
     return n > 0
 
 
+def season_range(spec: str) -> list[str]:
+    """'101S3:115S2' -> 由舊到新的季度清單。"""
+    a, b = spec.split(":")
+    y, q = int(a[:3]), int(a[-1])
+    y2, q2 = int(b[:3]), int(b[-1])
+    out = []
+    while (y, q) <= (y2, q2):
+        out.append(f"{y}S{q}")
+        q += 1
+        if q == 5:
+            y, q = y + 1, 1
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seasons", type=int, default=12)
+    ap.add_argument("--range", dest="range_spec",
+                    help="下載指定範圍（含端點），如 101S3:115S2；與 --seasons 擇一")
     args = ap.parse_args()
     RAW_DIR.mkdir(parents=True, exist_ok=True)
+
+    if args.range_spec:
+        seasons = season_range(args.range_spec)
+        fails = [s for s in seasons if not download_season(s)]
+        print(f"\n完成：{len(seasons) - len(fails)}/{len(seasons)} 季"
+              + (f"；失敗：{', '.join(fails)}" if fails else ""))
+        sys.exit(1 if fails else 0)
 
     got = []
     for s in season_candidates(args.seasons):
